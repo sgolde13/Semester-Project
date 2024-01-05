@@ -1,0 +1,960 @@
+---
+title: "Data Analysis Project"
+subtitle: "EN.625.603.81 Spring 2022 Module 13"
+author: "Shelby Golden"
+date: "5/3/2022"
+output: pdf_document
+
+header-includes:
+  - \usepackage{wrapfig}
+  - \usepackage{graphicx}
+---
+```{r setup, include = FALSE}
+#####################################################################################
+## Document Setup
+library("rmarkdown")
+library("dplyr")
+library("plyr")
+library("ggplot2")
+library("ggprism")
+library("stringr")
+library("tidyverse")
+library("stats")
+library("gridExtra")
+library("lemon")
+library("parameters")
+library("Rfast")
+library("ggpubr")
+library("grid")
+
+'%!in%' <- function(x,y)!('%in%'(x,y))
+# source: https://stackoverflow.com/questions/5831794/opposite-of-in-exclude
+#   -rows-with-values-specified-in-a-vector
+
+
+bioIndex <- function(data, colData){
+  ## Calculated ...
+  
+  dat = data
+  col = data[, colData]
+  
+  biodivTable = table(col) %>% as.data.frame.table()
+  biodivTable$pi = biodivTable$Freq/sum(biodivTable$Freq)
+  biodivTable$piLogpi = biodivTable$pi*log(biodivTable$pi)
+  
+  index = -sum(biodivTable$piLogpi)
+  index
+}
+
+
+```
+
+## Introduction
+
+The rise of anthropogenic induced environmental changes has precipitated a harrowing trend of habitat loss and shrinking biodiversity. Aquatic life forms are particularly sensitive to changes in their habitat, which can fluctuate for an entire area due to a lack of microclimate formation, like those seen on land. Scientists set out to observe these habitats by measuring factors like temperature, salt content, and the water depth species are found.
+
+Water depth has a strong influence on how heat distributes in an aqueous environment. With the rise of surface ocean temperatures, scientists have observed fish are spending more time deeper than normal. Freitas et al. notes that this behavioral thermoregualtion can deprive species of their regular access to resources, like food. Diving deeper also comes with a reduction in local soluble oxygen that certain species may be less resilient to. Thus, rising surface temperatures can trap sensitive species in smaller and smaller habitable environments that fit their needs.
+
+Changes in aquatic localization and biodiversity challenges the structure of an ecosystem and can lead to a myriad of cascading effects. This paper will examine some of these well established trends. Specifically, changes in biodiversity by area and depth, changes in the probability select species are found at different depths over time, and a soft evaluation of temperature changes by region over 50 years.
+
+```{r importation, echo = FALSE, include = FALSE, message = FALSE}
+#####################################################################################
+## importation
+speData <- readRDS("/Users/shelbygolden/Downloads/pinskylab-OceanAdapt-966adf0/data_clean/all-regions-full.rds") %>% as.data.frame()
+  speData$lon <- round(speData$lon, 1)
+  speData$lat <- round(speData$lat, 1)
+  speData$year <- as.integer(speData$year)
+
+load("/Users/shelbygolden/Downloads/pinskylab-OceanAdapt-966adf0/data_raw/neus_Survdat.RData")
+  # called survdat
+  survdat$LON <- round(survdat$LON, 1)
+  survdat$LAT <- round(survdat$LAT, 1)
+  
+  
+#####################################################################################
+## set-up
+speData$region <- gsub(" Fall| Spring| Summer","", speData$region)
+  # unique(speData[, c("latGroup", "lonGroup", "region")])
+  
+  
+# Latitude and longitude range boundaries
+# range(survdat$LON) etc.
+#   Longitude: -81.4 to 57.2
+#   Latitude: 28.8 to 44.8  
+survdat <- survdat[which(survdat$LON > -81.4 & survdat$LON < 57.2 &
+                           survdat$LAT > 28.8 & survdat$LAT < 44.8), ]
+  
+speData <- speData[which(speData$lon > -81.4 & speData$lon < 57.2 &
+                           speData$lat > 28.8 & speData$lat < 44.8), ]
+
+lonGroups <- seq(-85, 60, by = 5)
+  survdat$lonGroup <- lonGroups[findInterval(survdat$LON, lonGroups)]
+  speData$lonGroup <- lonGroups[findInterval(speData$lon, lonGroups)]
+
+latGroups <- seq(25, 45, by = 5)
+  survdat$latGroup <- latGroups[findInterval(survdat$LAT, latGroups)]
+  speData$latGroup <- latGroups[findInterval(speData$lat, latGroups)]
+  
+  
+allRegions <- unique(speData[, c("latGroup", "lonGroup", "region")])
+
+for(i in 1:nrow(allRegions)){
+  survdat[which(survdat[, c("latGroup")] == allRegions[i, "latGroup"] &
+    survdat[, c("lonGroup")] == allRegions[i, "lonGroup"]), "region"] <- allRegions[i, 3]
+}
+
+tsFull = survdat[, -c(1:7, 10:12, 18, 20:23)] %>% .[, c(9, 1:8)] %>% 
+  `colnames<-`(c("region", "year", "season", "depth", "surfTemp", "surfSaline",
+                 "botTemp", "botSaline", "biomass"))
+
+
+metaData = aggregate(cbind(SURFTEMP, SURFSALIN, BOTTEMP, BOTSALIN, BIOMASS) ~
+                       region+YEAR+SEASON,
+                     data = survdat, mean, na.rm = TRUE)
+  names(metaData) <- c("region", "year", "season", "surfTemp", "surfSaline", "botTemp", 
+                   "botSaline", "biomass")
+
+speData <- speData[, -c(2, 4:7, 11:13)] %>% .[, c(4:5, 2, 1, 3)]
+
+
+tsFull <- na.omit(tsFull)
+metaData <- na.omit(metaData)
+speData <- na.omit(speData)
+
+
+dateRanges1 <- c(seq(1970, 2012, by = 5), 2015, 2019)
+  speData$dateRanges1 <- dateRanges1[findInterval(speData$year, dateRanges1)]
+  
+depthRanges <- seq(0, 500, by = 50)
+  speData$depthRange <- depthRanges[findInterval(speData$depth, depthRanges)]
+
+species <- speData[, -6]
+tempSalt <- metaData
+
+
+# Year boundaries
+#   metaData: 1992 to 2019
+#   speData: 1970 to 2019  
+species <- species[which(species$year >= 1992), ]
+  
+dateRanges <- c(seq(1992, 2012, by = 5), 2015, 2019)
+  species$dateRanges <- dateRanges[findInterval(species$year, dateRanges)]
+  
+
+```
+
+```{r biodiv, echo = FALSE, include = FALSE, message = FALSE}
+#####################################################################################
+## Biodiversity
+Regions = unique(speData$region)
+North <- speData[speData$region %in% Regions[2], ]
+datesEval = unique(speData$year) %>% sort()
+
+
+biodiv = list()
+totalDiv = list()
+for(i in 1:length(datesEval)){
+  proxy <- speData[speData$year %in% datesEval[i], ]
+
+  totalDiv[[i]] <- bioIndex(proxy, "spp")
+  regionList = list()
+  for(j in 1:length(Regions)){
+    proxy2 <- speData[speData$year %in% datesEval[i] & speData$region %in% Regions[j], ]
+
+    regionList[[j]] <- bioIndex(proxy2, "spp")
+  }
+  
+  biodiv[[i]] <- do.call(cbind, regionList)
+  
+}
+biodivFinal <- cbind(datesEval, do.call(rbind, totalDiv), do.call(rbind, biodiv)) %>% 
+  `colnames<-`(c("Dates", "All", "Northeast", "Southeast", "ScotianShelf")) %>%
+  as.data.frame()
+
+  biodivFinal[biodivFinal == 0] <- NA
+  
+  bioRegion = gather(biodivFinal, "Region", "Biodiversity", 2:5)
+  
+lm(Biodiversity ~ Region+Dates, bioRegion) %>% plot()
+
+northLM = lm(Biodiversity ~ Dates, bioRegion[bioRegion$Region %in% "Northeast", ])
+southLM = lm(Biodiversity ~ Dates, bioRegion[bioRegion$Region %in% "Southeast", ])
+scotianLM = lm(Biodiversity ~ Dates, bioRegion[bioRegion$Region %in% "ScotianShelf", ])
+
+# plot(southLM, which = 1)
+
+
+
+#### Plots
+ColorA = c("#D16103", "#293352", "#52854C", "#E7B800")  
+  
+bioRegPlot = ggplot(bioRegion[!bioRegion$Region %in% "All", ], 
+       aes(x = Dates, y = Biodiversity, group = Region, color = Region)) + geom_point() + 
+  scale_color_manual(values = ColorA[c(1, 3, 4)]) +
+  geom_abline(slope = coef(northLM)[["Dates"]], 
+                intercept = coef(northLM)[["(Intercept)"]], color = ColorA[1]) +
+  geom_abline(slope = coef(scotianLM)[["Dates"]], 
+                intercept = coef(scotianLM)[["(Intercept)"]], color = ColorA[3]) +
+  geom_abline(slope = coef(southLM)[["Dates"]], 
+                intercept = coef(southLM)[["(Intercept)"]], color = ColorA[4]) +
+  theme_prism(base_size = 14, base_line_size = 0.2) +
+    labs(x = "Year", y = "SBI") +
+    theme(plot.title = element_text(size = 20, hjust = 0.5), 
+         legend.text = element_text(size = 14))
+  
+
+
+coeff <- 8
+biodivPlot = ggplot() + geom_bar(data = speData, aes(x = dateRanges1, fill = spp), 
+                                 position = "fill", alpha = 0.8) +
+  geom_line(data = biodivFinal, aes(x = Dates, y = All/coeff), 
+            size = 1.1, color = ColorA[1]) + 
+  geom_line(data = biodivFinal, aes(x = Dates, y = Northeast/coeff), 
+            size = 1.1, color = ColorA[2]) + 
+  geom_line(data = biodivFinal, aes(x = Dates, y = Southeast/coeff), 
+            size = 1.1, color = ColorA[3]) + 
+  geom_line(data = biodivFinal, aes(x = Dates, y = ScotianShelf/coeff), 
+            size = 1.1, color = ColorA[4]) +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+  scale_y_continuous(name = "Cumulative Proportion of Species", 
+                     sec.axis = sec_axis(~.*coeff, name = "Shannon Biodiversity Index") ) +
+    labs(title = "Changes in Biodiversity", x = "Year") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9), legend.position = "none")
+
+```
+
+```{r depth, echo = FALSE, include = FALSE, message = FALSE}
+#####################################################################################
+## Depth
+yearObs <- unique(speData$year) %>% sort()
+
+bioYear = list()
+for(i in 1:length(yearObs)){
+  bioDep = list()
+  for(j in 1:length(unique(speData$depthRange)) ){
+    proxy1 = speData[speData$year %in% yearObs[i] &
+                   speData$depthRange %in% unique(speData$depthRange)[j], ]
+    
+    if(length(proxy1) > 0){
+      bioDep[[j]] <- bioIndex(proxy1, "spp")
+    } else{
+      bioDep[[j]] <- 0
+    }
+  }
+  proxy2 = data.frame("depth" = unique(speData$depthRange), "diversityIndex" = unlist(bioDep))
+  bioYear[[i]] <- proxy2
+}
+names(bioYear) <- yearObs
+biodivDepth <- do.call("rbind", bioYear) %>% tibble::rownames_to_column(., "Year")
+  biodivDepth$Year <- sub("\\..*", "", biodivDepth$Year) %>% as.numeric()
+  biodivDepth$depth <- as.factor(biodivDepth$depth)
+
+  
+depthPlot = ggplot(biodivDepth, aes(x = depth, y = diversityIndex, color = Year)) + 
+  geom_violin() +
+  geom_dotplot(binaxis = 'y', stackdir = 'center', dotsize = 1, binwidth = 0.01) +
+    geom_jitter(shape = 16, position = position_jitter(0.2), alpha = 0.7) +
+  scale_color_gradient(low = "blue", high = "red") +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+    labs(x = "Depth (meters)", y = "SBI") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9))
+
+
+
+
+depthTable = speData[which(speData$year %in% dateRanges1[10]), 
+                     c("spp", "depthRange")] %>%
+  table() %>% as.data.frame.table() %>% tidyr::spread(., depthRange, Freq) %>%
+  cbind("Date" = rep(dateRanges1[10], nrow(.))) %>%
+  .[, c(1, ncol(.), 2:(ncol(.)-1))]
+
+
+prior = list()
+for(i in 1:length(dateRanges1)){
+  prior[[i]] = speData[which(speData$year %in% dateRanges1[i]), 
+                       c("spp", "depthRange")] %>%
+    table() %>% as.data.frame.table() %>% tidyr::spread(., depthRange, Freq) %>%
+    cbind("Date" = rep(dateRanges1[i], nrow(.))) %>%
+    .[, c(1, ncol(.), 2:(ncol(.)-1))]
+}
+depthPrior <- rbind.fill(lapply(prior, function(y){as.data.frame((y), 
+                          stringsAsFactors = FALSE)}))
+
+countSum = c()
+priorPDF = list()
+for(i in 1:nrow(depthPrior)){
+  countSum[i] <- sum(depthPrior[i, -c(1:2)], na.rm = TRUE)
+  priorPDF[[i]] <- depthPrior[i, -c(1:2)]/sum(depthPrior[i, -c(1:2)], na.rm = TRUE)
+}
+priorP <- do.call(rbind, priorPDF) %>% sapply(., function(x) round(x, 3)) %>%
+  cbind(depthPrior[, c(1:2)], .) %>% `colnames<-`(colnames(depthPrior))
+
+  priorP$spp <- as.character(priorP$spp)
+  priorP$Date <- as.factor(priorP$Date)
+  priorP[is.na(priorP)] <- 0
+  
+#countSum %>% sort() %>% plot()  
+  # evaluate only species with occurrences > 150
+  #priorP <- priorP[countSum >= 275, ]
+    # table(priorP$Date)
+  
+priorP <- priorP[priorP$spp %in% c("Leucoraja erinacea", "Merluccius bilinearis", "Squalus acanthias", "Urophycis chuss"), ]
+
+  
+observations = table(priorP$spp, priorP$Date) %>% .[apply(., 1, sum) > 8, ]
+  priorP <- priorP[priorP$spp %in% rownames(observations) & 
+                     priorP$Date %in% unique(priorP$Date)[-c(1)], ]
+
+
+subSpecies = rownames(observations)
+  ColorP = c("#D16103", "#293352", "#52854C", "#E7B800")
+  
+sampleObservations = depthPrior[depthPrior$spp %in% subSpecies[2], -c(1)]
+
+
+##### species depth over time
+subPriorP =  gather(priorP[priorP$Date == 1980, ], "depth", "pdf", 3:11)
+  subPriorP$depth <- subPriorP$depth %>% as.numeric()
+  
+spline.d <- list()
+for(i in 1:length(subSpecies)){
+  spline.d[[i]] <- as.data.frame(spline(subPriorP[subPriorP$spp %in% subSpecies[i], "depth"],
+                                 subPriorP[subPriorP$spp %in% subSpecies[i], "pdf"]))
+}
+
+pdf1980 = ggplot(subPriorP) + geom_point(aes(x = depth, y = pdf, group = spp, color = spp)) +
+  scale_color_manual(values = ColorP) +
+  geom_line(data = spline.d[[1]], aes(x = x, y = y), color = ColorP[1]) +
+  geom_line(data = spline.d[[2]], aes(x = x, y = y), color = ColorP[2]) +
+  geom_line(data = spline.d[[3]], aes(x = x, y = y), color = ColorP[3]) +
+  geom_line(data = spline.d[[4]], aes(x = x, y = y), color = ColorP[4]) +
+  theme_prism(base_size = 10, base_line_size = 0.2) + ylim(-0.01, 0.6) +
+    labs(title = "1980", x = "Depth (meters)", y = "Bernoilli PDF") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9), legend.position = "none")
+
+
+
+
+subPriorP =  gather(priorP[priorP$Date == 2000, ], "depth", "pdf", 3:11)
+  subPriorP$depth <- subPriorP$depth %>% as.numeric()
+  
+spline.d <- list()
+for(i in 1:length(subSpecies)){
+  spline.d[[i]] <- as.data.frame(spline(subPriorP[subPriorP$spp %in% subSpecies[i], "depth"],
+                                 subPriorP[subPriorP$spp %in% subSpecies[i], "pdf"]))
+}
+
+pdf2000 = ggplot(subPriorP) + geom_point(aes(x = depth, y = pdf, group = spp, color = spp)) +
+  scale_color_manual(values = ColorP) +
+  geom_line(data = spline.d[[1]], aes(x = x, y = y), color = ColorP[1]) +
+  geom_line(data = spline.d[[2]], aes(x = x, y = y), color = ColorP[2]) +
+  geom_line(data = spline.d[[3]], aes(x = x, y = y), color = ColorP[3]) +
+  geom_line(data = spline.d[[4]], aes(x = x, y = y), color = ColorP[4]) +
+  theme_prism(base_size = 10, base_line_size = 0.2) + ylim(-0.01, 0.6) +
+    labs(title = "2000", x = "Depth (meters)", y = "Bernoilli PDF") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9), legend.position = "none")
+
+
+
+
+subPriorP =  gather(priorP[priorP$Date == 2019, ], "depth", "pdf", 3:11)
+  subPriorP$depth <- subPriorP$depth %>% as.numeric()
+  
+spline.d <- list()
+for(i in 1:length(subSpecies)){
+  spline.d[[i]] <- as.data.frame(spline(subPriorP[subPriorP$spp %in% subSpecies[i], "depth"],
+                                 subPriorP[subPriorP$spp %in% subSpecies[i], "pdf"]))
+}
+
+pdf2019 = ggplot(subPriorP) + geom_point(aes(x = depth, y = pdf, group = spp, color = spp)) +
+  scale_color_manual(values = ColorP) +
+  geom_line(data = spline.d[[1]], aes(x = x, y = y), color = ColorP[1]) +
+  geom_line(data = spline.d[[2]], aes(x = x, y = y), color = ColorP[2]) +
+  geom_line(data = spline.d[[3]], aes(x = x, y = y), color = ColorP[3]) +
+  geom_line(data = spline.d[[4]], aes(x = x, y = y), color = ColorP[4]) +
+  theme_prism(base_size = 10, base_line_size = 0.2) + ylim(-0.01, 0.6) +
+    labs(title = "2019", x = "Depth (meters)", y = "Bernoilli PDF") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9), legend.position = "none")
+
+```
+
+```{r Bayesian, echo = FALSE, include = FALSE, message = FALSE}
+#####################################################################################
+## Bayesian Estimation using Boostrap Sampling for Parameter
+dataProx50 =  cbind(priorP[priorP$spp %in% subSpecies[2], 
+                   c(1, 2, which(names(priorP) %in% "50"))] %>% 
+  `colnames<-`(c("Species", "Date", "pHat50")) %>% .[.$"pHat50" > 0, ], 
+  "Observed" = depthPrior[depthPrior$spp %in% subSpecies[2] & 
+                            depthPrior$Date %in% unique(depthPrior$Date)[2:11], 
+                          which(names(depthPrior) %in% "50") ],
+  "n" = depthPrior[depthPrior$spp %in% subSpecies[2] & 
+               depthPrior$Date %in% unique(depthPrior$Date)[2:11], -c(1:2)] %>% 
+               apply(., 1, function(x) sum(x, na.rm = TRUE)),
+  "sum(pHat)" = priorP[priorP$spp %in% subSpecies[2], c(3:11)] %>% 
+    apply(., 1,function(x) sum(x, na.rm = TRUE)))
+
+est = c()
+for(i in 1:nrow(dataProx50)){
+  est[i] = rbinom(10, dataProx50[i, "n"], dataProx50[i, "pHat50"]) %>% mean()
+}
+dataProx50$Estimated <- est
+
+  dataProx50 <- dataProx50[, c(1:2, 5:6, 3, 4, 7)] %>% `rownames<-`(NULL)
+
+  
+
+dataProx150 =  cbind(priorP[priorP$spp %in% subSpecies[2], 
+                   c(1, 2, which(names(priorP) %in% "150"))] %>% 
+  `colnames<-`(c("Species", "Date", "pHat150")) %>% .[.$"pHat150" > 0, ], 
+  "Observed" = depthPrior[depthPrior$spp %in% subSpecies[2] & 
+                            depthPrior$Date %in% unique(depthPrior$Date)[2:11], 
+                          which(names(depthPrior) %in% "150") ],
+  "n" = depthPrior[depthPrior$spp %in% subSpecies[2] & 
+               depthPrior$Date %in% unique(depthPrior$Date)[2:11], -c(1:2)] %>% 
+               apply(., 1, function(x) sum(x, na.rm = TRUE)),
+  "sum(pHat)" = priorP[priorP$spp %in% subSpecies[2], c(3:11)] %>% 
+    apply(., 1,function(x) sum(x, na.rm = TRUE)))
+
+est = c()
+for(i in 1:nrow(dataProx150)){
+  est[i] = rbinom(10, dataProx150[i, "n"], dataProx150[i, "pHat150"]) %>% mean()
+}
+dataProx150$Estimated <- est
+
+  dataProx150 <- dataProx150[, c(1:2, 5:6, 3, 4, 7)] %>% `rownames<-`(NULL)
+
+
+
+dataProx300 =  cbind(priorP[priorP$spp %in% subSpecies[2], 
+                   c(1, 2, which(names(priorP) %in% "300"))] %>% 
+  `colnames<-`(c("Species", "Date", "pHat300")) %>% .[.$"pHat300" > 0, ], 
+  "Observed" = depthPrior[depthPrior$spp %in% subSpecies[2] & 
+                            depthPrior$Date %in% unique(depthPrior$Date)[2:11], 
+                          which(names(depthPrior) %in% "300") ],
+  "n" = depthPrior[depthPrior$spp %in% subSpecies[2] & 
+               depthPrior$Date %in% unique(depthPrior$Date)[2:11], -c(1:2)] %>% 
+               apply(., 1, function(x) sum(x, na.rm = TRUE)),
+  "sum(pHat)" = priorP[priorP$spp %in% subSpecies[2], c(3:11)] %>% 
+    apply(., 1,function(x) sum(x, na.rm = TRUE)))
+
+est = c()
+for(i in 1:nrow(dataProx300)){
+  est[i] = rbinom(10, dataProx300[i, "n"], dataProx300[i, "pHat300"]) %>% mean()
+}
+dataProx300$Estimated <- est
+
+  dataProx300 <- dataProx300[, c(1:2, 5:6, 3, 4, 7)] %>% `rownames<-`(NULL)
+
+  
+
+## Calculating a Prior - Boostrap Method
+dataProx = priorP[priorP$spp %in% subSpecies[2:4], ] %>% 
+  tidyr::gather(., "Depth", "pdf", 3:length(.))
+
+
+startData = list(dataProx[dataProx$Date %in% 1980 & dataProx$Depth %in% 50, "pdf"],
+                 dataProx[dataProx$Date %in% 1980 & dataProx$Depth %in% 150, "pdf"],
+                 dataProx[dataProx$Date %in% 1980 & dataProx$Depth %in% 300, "pdf"])
+
+
+a_orig_hat = list()
+b_orig_hat = list()
+
+a_hat_boot = list()
+b_hat_boot = list()
+for(i in 1:3){
+  a_orig_hat[[i]] = beta.mle(startData[[i]], tol = 1e-09)$param[[1]]
+  b_orig_hat[[i]] = beta.mle(startData[[i]], tol = 1e-09)$param[[2]]
+  
+  a_boot_hat = list()
+  b_boot_hat = list()
+  for(j in 1:1000){
+    y <- sample(startData[[i]], 15, replace = T)
+
+    a_boot_hat[[j]] = beta.mle(y, tol = 1e-09)$param[[1]]
+    b_boot_hat[[j]] = beta.mle(y, tol = 1e-09)$param[[2]]
+  }
+
+  a_hat_boot[[i]] = unlist(a_boot_hat) %>% mean()
+  b_hat_boot[[i]] = unlist(b_boot_hat) %>% mean()
+}
+
+  
+
+## Posterior at depth = 50
+n2000 = dataProx50[dataProx50$Date %in% unique(dataProx50$Date)[6], "n"]
+k2000 = dataProx50[dataProx50$Date %in% unique(dataProx50$Date)[6], "Observed"]
+
+a_new_2000 = a_hat_boot[[1]] + k2000
+b_new_2000 = b_hat_boot[[1]] + n2000 - k2000
+
+
+n2019 = dataProx50[dataProx50$Date %in% unique(dataProx50$Date)[10], "n"]
+k2019 = dataProx50[dataProx50$Date %in% unique(dataProx50$Date)[10], "Observed"]
+a_new_2019 = a_hat_boot[[1]] + k2019
+b_new_2019 = b_hat_boot[[1]] + n2019 - k2019
+
+
+x = seq(0, 1, by = 0.01)
+bay50 = data.frame("x" = x, 
+              "Prior" = dbeta(x, shape1 = a_hat_boot[[1]], shape2 = b_hat_boot[[1]]),
+              "Post2000" = dbeta(x, shape1 = a_new_2000, shape2 = b_new_2000),
+              "Post2019" = dbeta(x, shape1 = a_new_2019, shape2 = b_new_2019)) %>%
+        tidyr::gather(., "BetaPhase", "pdf", 2:length(.))
+
+bPlot50 = ggplot() + 
+  geom_line(data = bay50, aes(x = x, y = pdf, group = BetaPhase, color = BetaPhase)) +
+  scale_color_manual(values = c(ColorP[1], ColorP[3], ColorP[4])) + xlim(0.25, 0.6) +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+  labs(title = "theta at Depth = 50", x = "x", y = "g(theta | n, k)") +
+  theme(plot.title = element_text(size = 16, hjust = 0.5), 
+       legend.text = element_text(size = 9), legend.title = element_blank())
+
+
+
+## Posterior at depth = 150
+n2000.2 = dataProx150[dataProx150$Date %in% unique(dataProx150$Date)[6], "n"]
+k2000.2 = dataProx150[dataProx150$Date %in% unique(dataProx150$Date)[6], 
+                      "Observed"]
+a_new_2000.2 = a_hat_boot[[2]] + k2000.2
+b_new_2000.2 = b_hat_boot[[2]] + n2000.2 - k2000.2
+
+
+n2019.2 = dataProx150[dataProx150$Date %in% unique(dataProx150$Date)[10], "n"]
+k2019.2 = dataProx150[dataProx150$Date %in% unique(dataProx150$Date)[10], 
+                      "Observed"]
+a_new_2019.2 = a_hat_boot[[2]] + k2019.2
+b_new_2019.2 = b_hat_boot[[2]] + n2019.2 - k2019.2
+
+
+x = seq(0, 1, by = 0.01)
+bay150 = data.frame("x" = x, 
+              "Prior" = dbeta(x, shape1 = a_hat_boot[[2]], shape2 = b_hat_boot[[2]]),
+              "Post2000" = dbeta(x, shape1 = a_new_2000.2, shape2 = b_new_2000.2),
+              "Post2019" = dbeta(x, shape1 = a_new_2019.2, shape2 = b_new_2019.2)) %>%
+        tidyr::gather(., "BetaPhase", "pdf", 2:length(.))
+
+bPlot150 = ggplot() + 
+  geom_line(data = bay150, aes(x = x, y = pdf, group = BetaPhase, color = BetaPhase)) +
+  scale_color_manual(values = c(ColorP[1], ColorP[3], ColorP[4])) + xlim(0.05, 0.2) +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+  labs(title = "theta at Depth = 150", x = "x", y = "g(theta | n, k)") +
+  theme(plot.title = element_text(size = 16, hjust = 0.5), 
+       legend.text = element_text(size = 9) , legend.title = element_blank())
+
+
+
+
+## Posterior at depth = 300
+n2000.3 = dataProx300[dataProx300$Date %in% unique(dataProx300$Date)[6], "n"]
+k2000.3 = dataProx300[dataProx300$Date %in% unique(dataProx300$Date)[6], 
+                      "Observed"]
+a_new_2000.3 = a_hat_boot[[3]] + k2000.3
+b_new_2000.3 = b_hat_boot[[3]] + n2000.3 - k2000.3
+
+
+n2019.3 = dataProx300[dataProx300$Date %in% unique(dataProx300$Date)[10], "n"]
+k2019.3 = dataProx300[dataProx300$Date %in% unique(dataProx300$Date)[10], 
+                      "Observed"]
+a_new_2019.3 = a_hat_boot[[3]] + k2019.3
+b_new_2019.3 = b_hat_boot[[3]] + n2019.3 - k2019.3
+
+
+x = seq(0, 1, by = 0.01)
+bay300 = data.frame("x" = x, 
+              "Prior" = dbeta(x, shape1 = a_hat_boot[[3]], shape2 = b_hat_boot[[3]]),
+              "Post2000" = dbeta(x, shape1 = a_new_2000.3, shape2 = b_new_2000.3),
+              "Post2019" = dbeta(x, shape1 = a_new_2019.3, shape2 = b_new_2019.3)) %>%
+        tidyr::gather(., "BetaPhase", "pdf", 2:length(.))
+
+bPlot300 = ggplot() + 
+  geom_line(data = bay300, aes(x = x, y = pdf, group = BetaPhase, color = BetaPhase)) +
+  scale_color_manual(values = c(ColorP[1], ColorP[3], ColorP[4])) + 
+  ylim(0, 400) +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+  labs(title = "theta at Depth = 300", x = "x", y = "g(theta | n, k)") +
+  theme(plot.title = element_text(size = 16, hjust = 0.5), 
+       legend.text = element_text(size = 9) , legend.title = element_blank())
+
+
+
+```
+
+```{r surfTemp, echo = FALSE, include = FALSE, message = FALSE}
+#####################################################################################
+## Relationship of surface temp to region and year
+#speData
+#tempSalt
+#tsFull
+
+
+#### Contingency tables
+areas = tsFull$region %>% unique() # don't use [2] = Southeast
+
+fallTemp = tsFull[tsFull$season %in% "FALL" & 
+                    tsFull$region %in% areas[c(1,3)], c(1, 2, 5)] %>% `rownames<-`(NULL)
+
+fTempR = data.frame("Northeast US" = c(summary(fallTemp[fallTemp$region %in% areas[1], 
+                                                      c(3)]) ),
+            "Scotian Shelf" = c(summary(fallTemp[fallTemp$region %in% areas[3], c(3)]) ))
+
+## generating category
+fallTemp[which(fallTemp[fallTemp$region %in% areas[1], 3] <= 
+               fTempR[2, 1]), "surfTRange"] <- "firstQ"
+fallTemp[which(fallTemp[fallTemp$region %in% areas[1], 3] > 
+               fTempR[2, 1] &
+             fallTemp[fallTemp$region %in% areas[1], 3] <= 
+               fTempR[3, 1]), "surfTRange"] <- "secondQ"
+fallTemp[which(fallTemp[fallTemp$region %in% areas[1], 3] > 
+               fTempR[3, 1] &
+             fallTemp[fallTemp$region %in% areas[1], 3] <= 
+               fTempR[5, 1]), "surfTRange"] <- "thirdQ"
+fallTemp[which(fallTemp[fallTemp$region %in% areas[1], 3] > 
+               fTempR[5, 1]), "surfTRange"] <- "fourthQ"
+
+
+fallTemp[which(fallTemp[fallTemp$region %in% areas[2], 3] <= 
+               fTempR[2, 2]), "surfTRange"] <- "firstQ"
+fallTemp[which(fallTemp[fallTemp$region %in% areas[2], 3] > 
+               fTempR[2, 2] &
+             fallTemp[fallTemp$region %in% areas[2], 3] <= 
+               fTempR[3, 2]), "surfTRange"] <- "secondQ"
+fallTemp[which(fallTemp[fallTemp$region %in% areas[2], 3] > 
+               fTempR[3, 2] &
+             fallTemp[fallTemp$region %in% areas[2], 3] <= 
+               fTempR[5, 2]), "surfTRange"] <- "thirdQ"
+fallTemp[which(fallTemp[fallTemp$region %in% areas[2], 3] > 
+               fTempR[5, 2]), "surfTRange"] <- "fourthQ"
+
+
+contTab = table(fallTemp$surfTRange, fallTemp$region)
+#table(fallTemp$surfTRange, fallTemp$year)
+
+
+R = apply(contTab, 1, function(x) sum(x, na.rm = TRUE))
+C = apply(contTab, 2, function(x) sum(x, na.rm = TRUE))
+A = sum(R) + sum(C)
+
+df = (length(R) - 1)*(length(C) - 1)
+
+E = round(R%*%t(C)/A)
+O = contTab %>% as.matrix()
+
+xSquT = sum((O - E)^2/E, na.rm = TRUE)
+
+
+fPval = 1 - pchisq(xSquT, df)
+fCritical = qchisq(0.99, df)
+
+
+
+
+
+
+sprTemp = tsFull[tsFull$season %in% "SPRING" & 
+                    tsFull$region %in% areas[c(1,3)], c(1, 2, 5)] %>% `rownames<-`(NULL)
+
+sTempR = data.frame("Northeast US" = c(summary(sprTemp[sprTemp$region %in% areas[1], 
+                                                      c(3)]) ),
+            "Scotian Shelf" = c(summary(sprTemp[sprTemp$region %in% areas[3], c(3)]) ))
+
+## generating category
+sprTemp[which(sprTemp[sprTemp$region %in% areas[1], 3] <= 
+               sTempR[2, 1]), "surfTRange"] <- "firstQ"
+sprTemp[which(sprTemp[sprTemp$region %in% areas[1], 3] > 
+               sTempR[2, 1] &
+             sprTemp[sprTemp$region %in% areas[1], 3] <= 
+               sTempR[3, 1]), "surfTRange"] <- "secondQ"
+sprTemp[which(sprTemp[sprTemp$region %in% areas[1], 3] > 
+               sTempR[3, 1] &
+             sprTemp[sprTemp$region %in% areas[1], 3] <= 
+               sTempR[5, 1]), "surfTRange"] <- "thirdQ"
+sprTemp[which(sprTemp[sprTemp$region %in% areas[1], 3] > 
+               sTempR[5, 1]), "surfTRange"] <- "fourthQ"
+
+
+sprTemp[which(sprTemp[sprTemp$region %in% areas[2], 3] <= 
+               sTempR[2, 2]), "surfTRange"] <- "firstQ"
+sprTemp[which(sprTemp[sprTemp$region %in% areas[2], 3] > 
+               sTempR[2, 2] &
+             sprTemp[sprTemp$region %in% areas[2], 3] <= 
+               sTempR[3, 2]), "surfTRange"] <- "secondQ"
+sprTemp[which(sprTemp[sprTemp$region %in% areas[2], 3] > 
+               sTempR[3, 2] &
+             sprTemp[sprTemp$region %in% areas[2], 3] <= 
+               sTempR[5, 2]), "surfTRange"] <- "thirdQ"
+sprTemp[which(sprTemp[sprTemp$region %in% areas[2], 3] > 
+               sTempR[5, 2]), "surfTRange"] <- "fourthQ"
+
+
+contTab2 = table(sprTemp$surfTRange, sprTemp$region)
+
+R2 = apply(contTab2, 1, function(x) sum(x, na.rm = TRUE))
+C2 = apply(contTab2, 2, function(x) sum(x, na.rm = TRUE))
+A2 = sum(R) + sum(C)
+
+df2 = (length(R2) - 1)*(length(C2) - 1)
+
+E2 = round(R2%*%t(C2)/A2)
+O2 = contTab2 %>% as.matrix()
+
+xSquT2 = sum((O2 - E2)^2/E2, na.rm = TRUE)
+
+
+sPval = 1 - pchisq(xSquT2, df2)
+sCritical = qchisq(0.99, df)
+
+
+
+#### Linear modeling on average temperature by year
+tempLMSpr = lm(surfTemp ~ year+region, tempSalt[tempSalt$season %in% "SPRING" &
+                tempSalt$region %in% areas[c(1,3)], ])
+
+tempLMSprN = lm(surfTemp ~ year, tempSalt[tempSalt$season %in% "SPRING" &
+                tempSalt$region %in% areas[1], ])
+tempLMSprSc = lm(surfTemp ~ year, tempSalt[tempSalt$season %in% "SPRING" &
+                tempSalt$region %in% areas[3], ])
+
+l1Out <- capture.output(summary(tempLMSpr))
+l1Out[10:14]
+
+
+
+#### Plots
+tempByReg = ggplot(tempSalt[tempSalt$season %in% "SPRING" & 
+                              tempSalt$region %in% areas[c(1,3)], ], 
+       aes(x = region, y = surfTemp, group = region, color = year)) + geom_violin() + 
+  geom_dotplot(binaxis = 'y', stackdir = 'center', dotsize = 1, binwidth = 0.01) +
+    geom_jitter(shape = 16, position = position_jitter(0.2), alpha = 0.7) +
+  scale_color_gradient(low = "blue", high = "red") +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+    labs(x = "Region", y = "Surface Temp (deg C)") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9))
+
+
+
+ColorA = c("#D16103", "#293352", "#52854C", "#E7B800")  
+
+tempByYear = ggplot(tempSalt[tempSalt$season %in% "SPRING" & 
+                               tempSalt$region %in% areas[c(1,3)], ], 
+       aes(x = year, y = surfTemp, group = region, color = region)) + geom_point() +
+  scale_color_manual(values = ColorA[c(1, 4)]) +
+  geom_abline(slope = coef(tempLMSprN)[["year"]], 
+                intercept = coef(tempLMSprN)[["(Intercept)"]], color = ColorA[1]) +
+  geom_abline(slope = coef(tempLMSprSc)[["year"]], 
+                intercept = coef(tempLMSprSc)[["(Intercept)"]], color = ColorA[4]) +
+  theme_prism(base_size = 10, base_line_size = 0.2) +
+    labs(x = "Year", y = "Surface Temp (deg C)") +
+    theme(plot.title = element_text(size = 16, hjust = 0.5), 
+         legend.text = element_text(size = 9))
+
+
+
+
+
+```
+
+## Data Description
+
+In this paper I will be using data from OceanAdapt, which is a collaborative research initiative that includes Pinsky Lab of Rutgers University, the National Marine Fisheries Service (NMFS), and Fisheries and Oceans Canada (DFO). The data has been routinely collected by the NMFS, DFO, NOAA and other agencies over the past 50 years to monitor fish and invertebrate populations in the waters surrounding North America and Canada.
+
+It only includes regions where consistent survey methods were employed and does not include coastlines in an effort to "prevent poleward shifts in distribution". It also only includes species that are caught every year so as to prevent species composition from being a trend effector.
+
+Unfortunately, the data set focusing on species did not clearly indicate the season the observation occurred. Consequentially, seasonal shifts are not granularly evaluated in the species data, and are only generally related to surface temperature changes by year. Latitude and longitude pairs of a given observation were categorized into one of three regions:  "Northeast US", "Southeast US", and "Scotian Shelf".
+
+To address the question about how species localize at different depths over time, four species with the most observations over the years (> 275) were identified for further in-depth analysis. These fish also showed a range of observations at different depths. Species: Leucoraja erinacea, Merluccius bilinearis, Squalus acanthias, and Urophycis chuss.
+
+```{r showPlot2, echo = FALSE, message = FALSE, warning = FALSE, include = FALSE}
+png("plot2.png")
+plot(southLM, which = 1, main = "Figure 1: Residuals vs. Fitted")
+dev.off()
+
+```
+
+\begin{wrapfigure}{l}{0.4\textwidth}
+  \centering
+    \includegraphics[width=\linewidth]{plot2.png}
+\end{wrapfigure}
+
+It is entirely possible that they migrate to escape temperature fluctuation, or may naturally migrate around the coast. Indeed, some of the selected species have scientific literature indicating that they migrate up and down the east coast. Despite these possible effectors, because I will be evaluating the changes of depth localization via Bayesian analysis, I am hopeful that it will still indicate general trends of depth localization.
+
+## Statistical Methods
+
+Changes in biodiversity (reported as a Shannon Biodiversity Index  ($SBI = -\sum^{s}_{i=1} p_i \ln(p_i)$) over 50 years is shown in the key findings section (Figure 2), where each region has their resultant linear fitting plotted. From what I could find about lm() in R, it uses the Least Squares Method to fit linearly related random variables (Madrury, GitHub).
+
+The residual plots for the Northeast and Scotian Shelf linear models look heteroscedastic, one of the requisite conditions for a linear fitting. The Southern region residual plot has a distinct shape that suggests the data may not be linearly related (Figure 1). Because of this, its linear model's slope is not reported and it's values will be excluded from linear modeling with temperature changes.
+
+```{r table, echo = FALSE, message = FALSE, warning = FALSE, include = FALSE}
+png("plot3.png", height = 175, res = 100)
+grid.table(dataProx50[1:5, -c(1)], theme = ttheme_minimal())
+dev.off()
+
+```
+
+\begin{wrapfigure}{R}{0.4\textwidth}
+  \centering
+    \includegraphics[width=1\linewidth]{plot3.png}
+\end{wrapfigure}
+
+The probability a fish is found at different depths can be seen as a multivariate binomial distribution, where each $X = 0, 50, 100, ..., 450$ meters. In this paper I will evaluate it as a simple binomial distribution by looking at the marginal PDF. In this case, one depth level will be categorized as a "success" while all the remaining are seen as a "failure". As far as can be discerned regarding the data collection, observations are each random and independent.
+
+Table 1 shows a snapshot of the probability that Merluccius bilinearis was observed at 50 meters below. The $\hat p$ column is calculated using the maximum likelihood estimator for a binomial distribution, $\sum k_i/n$. The estimated column is the expected observed frequency of fish if $\hat p$ was the actual probability for a binomial distribution with the respective n observations. The observed and estimated columns show good alignment, which suggests that the data can be assumed to be binomially distributed.
+
+Were we to assume $\hat p$ is constant, then a proportions hypothesis test could be employed; $H_o: p_x = p_y$. In order to do this hypothesis test on binomial random variables, $X$ and $Y$, their proportions, $X/n$ and $Y/m$, need to be normally distributed to satisfy the Generalized Likelihood Ratio Test (GLRT). As is evident from Figure 3.A., this key requirement not likely to be satisfied.
+
+Another method to evaluate changes in $\hat p$ over time is through Bayesian analysis. As described above, the probability that a fish is located at a given depth is reasonably binomially distributed. Intuitively, we know that $\hat p$ is not constant, and has its own distribution. It will be referred to as $\theta$ going forward in the context of this statistical test. In order to leverage a Bayesian analysis I assumed $\theta$ to be a Beta distributed random variable. Utilizing the bootstrap technique, I randomly sampled from three similarly trending species (Figure 3.A.) in 1980 to estimate the prior parameters, $r$ and $s$. For example, for a binomial distribution at 50 meters, $\hat r=$ `r round(a_hat_boot[[1]], 3)` and $\hat s=$ `r round(b_hat_boot[[1]], 3)`.
+
+As we did in Module 12, the prior distribution was "updated" to the posterior distribution with Beta parameters $r_{new}=r+k$ and $s_{new}=s+n-k$. This process was completed three times, each assuming depth = 50, 150, and 300 meters was a "success". The resultant shift in $\theta$ for 1980, 2000, and 2019 were overlayed for each depth analysed (Figure 3.B.). The analysis for observances at 300 meters did not yield a probability distribution. This could be attributed to how infrequently these species visit 300 meters below the water surface. The probability distribution is therefore not displayed.
+
+In order to establish a relationship between surface temperature, region, and year observed two methods were employed: contingency tables for linear independence and linear modeling for trend analysis. Although R has a package for evaluating contingency tables, I calculated this "by hand", so to speak, in the manner that was demonstrated in lecture series 10.I. Earlier in the paper I showed that the the data collected in the Southeast region may not be linearly related, due to a homoscedastic residual plot (Figure 1). Thus, its data is not evaluated.
+
+## Key Findings
+
+### Changes in biodiversity by area and depth
+
+```{r showPlot, echo = FALSE, message = FALSE, warning = FALSE, include = FALSE}
+png("plot1.png")
+d = ggarrange(bioRegPlot, depthPlot, ncol = 1, nrow = 2,
+          common.legend = FALSE, legend="right", labels = c("A", "B"))
+annotate_figure(d, top = text_grob("", size = 20), 
+                fig.lab = "Figure 2: Biodiversity Changes", 
+                fig.lab.face = "bold", fig.lab.size = 14)
+dev.off()
+
+```
+
+\begin{wrapfigure}{L}{0.4\textwidth}
+  \centering
+    \includegraphics[width=\linewidth]{plot1.png}
+\end{wrapfigure}
+
+Linear modeling lm(Biodiversity ~ Dates) for each subset of data by the three regions yielded the plot shown in Figure 2.A.. Northeast US biodiversity increased by `r round(northLM$coefficients[["Dates"]], 4)` every year with an $r^2=$ `r round(summary(northLM)$r.squared, 3)`. Biodiversity in the Scotian Shelf had a more dramatic expected increase at `r round(scotianLM$coefficients[["Dates"]], 4)` each year and an $r^2=$ `r round(summary(scotianLM)$r.squared, 3)`. As was stated earlier, the Southeast region residuals plot indicated that the data may not be linearly related. To further this point, its $r^2=$ `r round(summary(southLM)$r.squared, 3)`.
+
+Thus, a general increase in biodiversity is associated by year for the Northeast and Southeast. A greater change is observed in the Scotian area compared to the Northeast, at a `r round(scotianLM$coefficients[["Dates"]]/northLM$coefficients[["Dates"]], 1)`  fold difference. Later in this paper these trends will be related to temperature changes over the 50 years recorded.
+
+By visual inspection of the scatter plots, it almost looks like the linear fitting can be further decomposed by time series. This is beyond the scope of my knowledge and was not attempted here. However, a time series decomposition of the linear model could account for additional variation left unexplained with the current fitting as indicated by the model $r^2$ values.
+
+```{r showPlot3, echo = FALSE, message = FALSE, warning = FALSE, include = FALSE}
+#####################################################################################
+## sample plot code
+hide <- theme(legend.position = 'hidden')
+a = ggarrange(pdf1980+hide, pdf2000+hide, pdf2019+hide, ncol = 3, nrow = 1,
+          common.legend = TRUE, legend="bottom")
+
+b = ggarrange(bPlot50+hide, bPlot150+hide, ncol = 2, nrow = 1,
+          common.legend = TRUE, legend="right")
+
+png("plot4.png")
+plot = ggarrange(a, b, ncol = 1, nrow = 2, labels = c("A", "B"))
+annotate_figure(plot, top = text_grob("", color = "red", face = "bold", 
+                      size = 20), 
+                fig.lab = "Figure 3: Probability Distribution at Different Depths", 
+                fig.lab.face = "bold", fig.lab.size = 14)
+dev.off()
+
+```
+
+\begin{wrapfigure}{R}{0.4\textwidth}
+  \centering
+    \includegraphics[width=\linewidth]{plot4.png}
+\end{wrapfigure}
+
+Very simply, I generated violin plots showing the biodiversity change by depth (Figure 2.B.). On top of each violin plot are scale colored points showing how SBI changes over 50 years. As we intuitively expected, biodiversity decreases the further below the ocean surface we measure. Interestingly, we see that there is some divergence in biodiversity counts by year at 0-50 meters. Here, we see that biodiversity at this depth increased from 1970 to 2010 enough to give the violin plot a bi-modal shape. The two regions spanning 50-150 meters show a slight skew indicating that biodiversity increased at these levels over time as well, but that it was not as pronounced at the 0-50 meter range.
+
+### Changes in species depth location over 50 years
+
+In Figure 3.A. the multivariate probability that the four species of focus are plotted and fitted with a spline curve to emphasize the distribution shape. In general, three fish, Merluccius bilinearis (blue), Squalus acanthias (green), and Urophycis chuss (yellow), trend similarly by depth and even across time. In order to estimate the random variable $\theta$, I assumed that these fish depth-localization behavior are similar enough to demonstrate how $\theta$ varies to the Bootstrap algorithm.
+
+Figure 3.B. shows how $\theta$ changes after additional data is considered. The initial, yellow, distribution represents the Beta Prior using the Bootstrap estimated parameters $\hat r$ and $\hat s$ informed by the three similarly trending species in 1980. For simplicity, I only evaluated changes in $\theta$ for Merluccius bilinearis. Each additional posterior variables ($n$ and $k$) are the total number of observations and number of successful observations seen at each depth in 2000 and 2019.
+
+Based on the observations made by many scientific groups, we would expect that the probability that Merluccius bilinearis is found at higher depths decreases, while lower depths increase. The plots shown in Figure 3.B. suggest the same trend, especially for the probability that we would find Merluccius bilinearis at 50-100 meters. The expected value for $\theta$ at 50-100 meters changes from around 0.42 in 1980 to 0.40 in 2019. The expected value for $\theta$ at 150-200 meters changes from around 0.11 in 1980 to 0.14 in 2019.
+
+### Temperature changes by region over 50 years
+
+```{r showPlot4, echo = FALSE, message = FALSE, warning = FALSE, include = FALSE}
+hide <- theme(legend.position = 'hidden')
+
+png("plot5.png")
+c = ggarrange(tempByYear+hide, tempByReg+hide, ncol = 1, nrow = 2,
+          common.legend = FALSE, legend="right", labels = c("A", "B"))
+annotate_figure(c, top = text_grob("", color = "red", face = "bold", 
+                      size = 20), 
+                fig.lab = "Figure 4: Temperature Changes", 
+                fig.lab.face = "bold", fig.lab.size = 14)
+dev.off()
+
+```
+
+\begin{wrapfigure}{l}{0.4\textwidth}
+  \centering
+    \includegraphics[width=\linewidth]{plot5.png}
+\end{wrapfigure}
+
+In order to avoid the normal temperature swings seen seasonally, the relationship between surface area and location or year were evaluated for data collected in either the fall or spring. No other seasons were captured in the data set. Residual plots for fall data appeared homoscedastic, and so only data collected in the spring is linearly modeled.
+
+The independence of temperature and area was evaluated using contingency tables. Here, each temperature measurement was categorized into first, second, third, or fourth quantile based on the spread of temperature observations in each region. This procedure was repeated for both data collected in the spring and fall.
+
+Fall: critical value = `r round(fCritical, 2)`, test statistic = `r xSquT`
+
+Spring: critical value = `r round(sCritical, 2)`, test statistic = `r xSquT2`
+
+Clearly, we would reject the null hypothesis in both cases, meaning that temperature and region are NOT independent. This affirms what we would intuitively expect to see. As can be seen from the test statistic, it is thousands of times higher than the critical cut-off value. I wonder if there is a limitation computing contingency tables over thousands of observations, as was completed here?
+
+In both plots contained in Figure 4 we can see a clear association between surface temperature and the year. The change between the areas is relatively close. Northeast slope: `r round(tempLMSprN$coefficients[["year"]], 4)` with $r^2=$ `r round(summary(tempLMSprN)$r.squared, 3)` and Scotian Shelf slope: `r round(tempLMSprSc$coefficients[["year"]], 4)` with $r^2=$ `r round(summary(tempLMSprSc)$r.squared, 3)`. A null hypothesis comparing these slopes was not completed in this analysis.
+
+Here the fitting of both models is pretty underwhelming. Based on some oscillating temperature changes, it is possible that certain year's data collection were closer to winter or summer compared to others. Additionally, there appears to be the potential of further time series decomposition of these data, which is not completed here.
+
+Figure 4.B. affirms what is shown in Figure 4.A., that the oceans surface temperature has increased over the 50 years observed.
+
+
+## Discussion
+
+In this paper, I sought to affirm the well established scientific findings of biodiversity change by depth over time. Around this, I sought to show that sea surface temperatures have increased over the 50 years observed, and that biodiversity changes and sea temperature increase is observed in different regions.
+
+Starting out, it seemed contrary to see biodiversity consistently increase over the span observed. It's plausible that improved data collection on the part of OceanAdapt can explain this. However, if that were entirely the case, I would expect to see an asymptotic curve plateauing at the point where data collection methods did not change much afterward. This is not what is seen. The SBI index instead remains starkly linearly related by year without transformation, and with high $r^2$ statistics.
+
+In marine biology communities, biodiversity is expected to increase with reasonable increases in temperature (Freitas et al.). This comes down to factors like metabolism and reproduction which are temperature dependent (Sinclair et al.). Even though it is not directly analyzed here, it makes sense that the linear dependence of biodiversity over time is statistically associated with increases in surface temperature. This was not directly analyzed here because the data set for species only stated the year observed and not the time of year, and thus could not be related back to the data set about sea temperatures without ignoring seasonal changes.
+
+The analysis sections evaluating changes in depth affirm the well established behavioral thermoregualtion observation, where fish migrate to deeper waters as the surface temperature increases (Freitas et al.). Here I randomly selected species purely based on how many observations were recorded for each. It would have been interesting to further this by selecting a species that is known to not migrate or consistently localizes within a small depth range. The species analyzed here localized anywhere from 0 to 250 meters below, which might have watered down any general trends to localize at lower depths. Still, a shift, albeit slight, is clear from the Bayesian analysis.
+
+
+## Acknowledgments
+
+I'd like to acknowledge the scientists who have contributed generating the OceanAdapt database and make it available for free. The R community, who shares tips on StackExchange, continues to maintain the platform, and expand its operative tools with indispensible packages.
+
+I'd also like the thank the Dr.'s Bodt and Savkli for putting together the lecture material for the course and the authors of our textbook for such a comprehensive and informative compilation of statistics.
+
+I'd especially like to thank Dr. Wang, who was our dedicated professor for the semester, and offered her expertise and insights throughout the semester.
+
+## Reference Links
+Data Source: [Pinsky Lab at Rutgers Unigersity, Department of Ecology, Evolution, and Natural Resources](https://pinsky.marine.rutgers.edu/) : [Data Download Link](https://oceanadapt.rutgers.edu/)
+
+1. [How to Calculate Biodiversity, University of Florida](https://entnemdept.ufl.edu/hodges/protectus/lp_webfolder/9_12_grade/student_handout_1a.pdf)
+
+2. [Bootstrap Sampling Distribution and Confidence Intervals, Missouri State University](http://people.missouristate.edu/songfengzheng/Teaching/MTH541/Boostrap.pdf)
+
+3. [Parameter Estimation for the Beta Distribution by Claire Elayne Bangerter Owen](https://scholarsarchive.byu.edu/cgi/viewcontent.cgi?article=2613&context=etd)
+
+4. [Bayes Programming in R by Minin et al.](https://si.biostat.washington.edu/sites/default/files/modules/2017_SISMID_8_Lab1.pdf)
+
+5. [A Deep Dive Into How R Fits a Linear Model](http://madrury.github.io/jekyll/update/statistics/2016/07/20/lm-in-R.html)
+
+6. [Can we predict ectotherm responses to climate change using thermal performance curves and body temperatures? DOI: 10.1111/ele.12686](https://onlinelibrary.wiley.com/doi/epdf/10.1111/ele.12686)
+
+7. [Sea temperature effects on depth use and habitat selection in a marine fish community DOI:10.1111/1365-2656.13497](https://besjournals.onlinelibrary.wiley.com/doi/10.1111/1365-2656.13497)
+
+
+\newpage
+## Appendix
+```{r get-labels, echo = FALSE}
+labs = c("setup", "importation", "biodiv", "depth", "Bayesian", "surfTemp", "showPlot3")
+```
+
+```{r all-code, ref.label = labs, eval=FALSE}
+```
