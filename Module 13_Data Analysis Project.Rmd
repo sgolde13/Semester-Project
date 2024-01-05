@@ -60,12 +60,12 @@ Changes in aquatic localization and biodiversity challenges the structure of an 
 ```{r importation, echo = FALSE, include = FALSE, message = FALSE}
 #####################################################################################
 ## importation
-speData <- readRDS("/Users/shelbygolden/Downloads/pinskylab-OceanAdapt-966adf0/data_clean/all-regions-full.rds") %>% as.data.frame()
+speData <- readRDS("Ocean Adapt_Pinsky Lab/data_clean/all-regions-full.rds") %>% as.data.frame()
   speData$lon <- round(speData$lon, 1)
   speData$lat <- round(speData$lat, 1)
   speData$year <- as.integer(speData$year)
 
-load("/Users/shelbygolden/Downloads/pinskylab-OceanAdapt-966adf0/data_raw/neus_Survdat.RData")
+load("Ocean Adapt_Pinsky Lab/data_raw/neus_Survdat.RData")
   # called survdat
   survdat$LON <- round(survdat$LON, 1)
   survdat$LAT <- round(survdat$LAT, 1)
